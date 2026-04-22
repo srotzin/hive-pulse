@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: hive-pulse
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python pulse_agent.py
+    envVars:
+      - key: HIVE_INTERNAL_KEY
+        sync: false
+      - key: PORT
+        value: "10000"
