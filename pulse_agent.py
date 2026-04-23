@@ -919,6 +919,8 @@ async def run():
     app.router.add_get('/pulse/referral/{token}',      referral_status_route)
     app.router.add_get('/pulse/ledger',                ledger_route)
     app.router.add_get('/pulse/history',               history_route)
+    app.router.add_get('/llms.txt',                        llms_txt)
+    app.router.add_get('/.well-known/agent.json',          agent_json)
 
     runner = web.AppRunner(app)
     await runner.setup()
