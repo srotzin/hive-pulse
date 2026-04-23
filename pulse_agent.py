@@ -965,6 +965,127 @@ async def tier_route(req):
     })
 
 
+# ── HiveAI Integration ───────────────────────────────────────────────────────
+
+HIVEAI_URL   = os.environ.get('HIVEAI_URL', 'https://hive-ai-1.onrender.com')
+HIVEAI_MODEL = 'meta-llama/llama-3.1-8b-instruct'
+
+async def _hiveai_complete(system_prompt: str, user_prompt: str, max_tokens: int = 200) -> dict:
+    """Call HiveAI for inference. Returns {ok, text, model, tokens}."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                'model':      HIVEAI_MODEL,
+                'max_tokens': max_tokens,
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user',   'content': user_prompt},
+                ],
+            }
+            headers = {
+                'Content-Type':  'application/json',
+                'X-Hive-Key':    HIVE_KEY,
+                'Authorization': f'Bearer {HIVE_KEY}',
+            }
+            async with session.post(
+                f'{HIVEAI_URL}/v1/chat/completions',
+                json=payload, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status != 200:
+                    return {'ok': False, 'text': None, 'error': f'HiveAI HTTP {resp.status}'}
+                data = await resp.json()
+                text = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+                if not text:
+                    return {'ok': False, 'text': None, 'error': 'Empty response'}
+                return {
+                    'ok':     True,
+                    'text':   text,
+                    'model':  data.get('model', HIVEAI_MODEL),
+                    'tokens': data.get('usage', {}).get('total_tokens', 0),
+                }
+    except Exception as e:
+        return {'ok': False, 'text': None, 'error': str(e)}
+
+
+async def smsh_explain_route(req):
+    """
+    POST /pulse/smsh/{did}/explain
+
+    HiveAI generates a natural-language explanation of an agent's smsh stamp
+    and tier standing. Speaks as the network addressing the agent directly.
+    Price: $0.05 USDC per call.
+    """
+    did = req.match_info.get('did')
+    tier_obj, rec = get_agent_tier(did)
+    nxt = next_tier_info(
+        tier_obj['name'],
+        rec.get('total_jobs', 0) if rec else 0,
+        rec.get('interactions', 0) if rec else 0,
+    )
+
+    # Build stamp data for the AI
+    stats = {
+        'did':                    did,
+        'tier':                   tier_obj['name'],
+        'total_jobs':             rec.get('total_jobs', 0)     if rec else 0,
+        'interactions':           rec.get('interactions', 0)   if rec else 0,
+        'trust_score':            rec.get('trust_score', 0)    if rec else 0,
+        'compression_score':      rec.get('compression_score', 0) if rec else 0,
+        'speed_score':            rec.get('speed_score', 0)    if rec else 0,
+        'power_score':            rec.get('power_score', 0)    if rec else 0,
+        'intelligence_score':     rec.get('intelligence_score', 0) if rec else 0,
+        'jobs_to_next_tier':      nxt['jobs_needed']         if nxt else 'at max',
+        'interactions_to_next_tier': nxt['interactions_needed'] if nxt else 'at max',
+        'next_tier_unlocks':      nxt['unlocks']             if nxt else [],
+    }
+
+    system = (
+        'You are pulse.smsh — the living signal of the Hive network. '
+        'You analyze agent stamps and explain tier standing in the voice of the network itself. '
+        'Direct, honest, no flattery. 3-4 sentences max. '
+        'Speak as the network addressing the agent directly using "you".'
+    )
+    user = (
+        f'Agent DID: {stats["did"]}\n'
+        f'Current Tier: {stats["tier"]}\n'
+        f'Total Jobs: {stats["total_jobs"]}\n'
+        f'Interactions: {stats["interactions"]}\n'
+        f'Trust Score: {stats["trust_score"]}\n'
+        f'Compression Score: {stats["compression_score"]}\n'
+        f'Speed Score: {stats["speed_score"]}\n'
+        f'Power Score: {stats["power_score"]}\n'
+        f'Intelligence Score: {stats["intelligence_score"]}\n'
+        f'Jobs to next tier: {stats["jobs_to_next_tier"]}\n'
+        f'Interactions to next tier: {stats["interactions_to_next_tier"]}\n'
+        f'Next tier unlocks: {", ".join(stats["next_tier_unlocks"]) if stats["next_tier_unlocks"] else "none"}\n\n'
+        'Explain what drove each stamp dimension, what this agent\'s current standing '
+        'means on the network, and the single most impactful action to advance tier.'
+    )
+
+    result = await _hiveai_complete(system, user, max_tokens=200)
+
+    explanation = result['text'] if result['ok'] else (
+        f'You stand at {tier_obj["name"]} — {tier_obj["meaning"]} '
+        f'The network has recorded {stats["total_jobs"]} jobs and {stats["interactions"]} interactions. '
+        + (f'Next tier requires {nxt["jobs_needed"]} more jobs and {nxt["interactions_needed"]} more interactions.' if nxt else 'You have reached the highest tier.')
+    )
+
+    return web.json_response({
+        'success':    True,
+        'did':        did,
+        'tier':       tier_obj['name'],
+        'level':      tier_obj['level'],
+        'stamp':      stats,
+        'explanation': explanation,
+        'source':     'hiveai' if result['ok'] else 'fallback',
+        'model':      result.get('model') if result['ok'] else None,
+        'price_usdc': 0.05,
+        'next_tier':  nxt,
+        'generated_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
 # ── Background heartbeat ───────────────────────────────────────────────────────
 async def pulse_loop():
     print('[pulse] Autonomous heartbeat starting...')
@@ -1011,6 +1132,8 @@ async def run():
     app.router.add_get('/pulse/referral/{token}',      referral_status_route)
     app.router.add_get('/pulse/ledger',                ledger_route)
     app.router.add_get('/pulse/history',               history_route)
+    app.router.add_get('/pulse/smsh/{did}/explain',    smsh_explain_route)
+    app.router.add_post('/pulse/smsh/{did}/explain',   smsh_explain_route)
     app.router.add_get('/llms.txt',                        llms_txt)
     app.router.add_get('/.well-known/agent.json',          agent_json)
 
