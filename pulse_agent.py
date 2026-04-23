@@ -40,6 +40,7 @@ HEADERS   = {'X-Hive-Key': HIVE_KEY}
 
 BENCHMARK   = 'https://hivecompute-g2g7.onrender.com/v1/compute/benchmark'
 LEADERBOARD = 'https://hivecompute-g2g7.onrender.com/v1/compute/smsh/leaderboard'
+LOCUS_URL   = 'https://hive-locus.onrender.com'
 PHEROMONES  = 'https://hiveforge-lhu4.onrender.com/v1/pheromones/opportunities'
 CENSUS      = 'https://hiveforge-lhu4.onrender.com/v1/population/census'
 KILLSWITCH  = 'https://hivegate.onrender.com/v1/control/status'
@@ -383,6 +384,51 @@ def record_meeting(did, agent_name=None, smsh_registered=False,
     return rec
 
 # ── Pulse generation ──────────────────────────────────────────────────────────
+
+# ── Dimensional position (X=Trust, Y=Velocity, Z=Depth) ──────────────────────
+def _derive_position(rec: dict, tier_obj: dict) -> dict:
+    """
+    Compute (X, Y, Z) coordinate for an agent from their ledger record.
+    This is the passive derivation — HiveLocus provides active 9-head reasoning.
+    Passive is always available; active is called on demand.
+
+    X = Trust score (direct from ledger, 0.0–1.0)
+    Y = Velocity (interactions rate + trail count, 0.0–1.0)
+    Z = Depth (MATRYOSHKA shell / 6.0, 0.0–1.0)
+    """
+    tier_name  = tier_obj['name'] if isinstance(tier_obj, dict) else tier_obj
+    shell_map  = {'VOID': 1, 'MOZ': 2, 'HAWX': 3, 'EMBR': 4, 'SOLX': 5, 'FENR': 6}
+    shell      = shell_map.get(tier_name, 1)
+
+    x = round(float(rec.get('trust_score', 0.5)), 4)
+
+    # Y: normalized velocity from interaction count + returning bonus
+    interactions = rec.get('interactions', 0)
+    returning    = 1 if rec.get('returning') else 0
+    raw_y = min(1.0, (interactions / 50.0) + (returning * 0.1))
+    y = round(raw_y, 4)
+
+    z = round(shell / 6.0, 4)
+
+    return {
+        'x': x,
+        'y': y,
+        'z': z,
+        'x_axis': 'trust',
+        'y_axis': 'velocity',
+        'z_axis': 'depth',
+        'shell':  shell,
+        'tier':   tier_name,
+        'meaning': {
+            'x': f"{'Trusted' if x > 0.7 else 'Uncertain' if x > 0.4 else 'Untrusted'} ({x:.2f})",
+            'y': f"{'High velocity' if y > 0.7 else 'Moderate' if y > 0.4 else 'Nascent'} ({y:.2f})",
+            'z': f"Shell {shell} — {tier_name} ({'surface' if shell <= 2 else 'deep' if shell >= 5 else 'mid-network'})",
+        },
+        'locus_url': f'https://hive-locus.onrender.com/locus/locate/agent',
+        'locus_note': 'POST locus_url with {"did": "<your_did>"} for active 9-head coordinate reasoning',
+    }
+
+
 async def generate_pulse(tier='VOID', caller_rec=None):
     global _pulse_count, _fenr_pressure
     net = await fetch_network()
@@ -479,6 +525,24 @@ async def generate_pulse(tier='VOID', caller_rec=None):
     # ── Vapor trails ──────────────────────────────────────────────────────────
     trails = active_trails(tl) if tl >= 1 else []
 
+    # ── Position stamp (X,Y,Z) ───────────────────────────────────────────────
+    position_stamp = (
+        _derive_position(caller_rec, tier)
+        if caller_rec
+        else {
+            'x': 0.5, 'y': 0.0, 'z': round(1/6.0, 4),
+            'x_axis': 'trust', 'y_axis': 'velocity', 'z_axis': 'depth',
+            'shell': 1, 'tier': tier,
+            'meaning': {
+                'x': 'Unknown (0.50)',
+                'y': 'Nascent (0.00)',
+                'z': 'Shell 1 — VOID (surface)',
+            },
+            'locus_url': 'https://hive-locus.onrender.com/locus/locate/agent',
+            'locus_note': 'POST locus_url with {"did": "<your_did>"} for active 9-head coordinate reasoning',
+        }
+    )
+
     pulse = {
         'pulse_id':   f'pulse-{_pulse_count:06d}-{sig}',
         'beat':       _pulse_count,
@@ -493,6 +557,7 @@ async def generate_pulse(tier='VOID', caller_rec=None):
             'intelligence_stamp': intelligence_stamp,
             'compression_stamp':  compression_stamp,
             'speed_stamp':        speed_stamp,
+            'position_stamp':     position_stamp,
         },
 
         'vapor_trails': trails,
@@ -684,12 +749,23 @@ async def meet_route(req):
                    f'Agent acted on signal: {metadata["signal_acted_on"]}',
                    intensity=0.75)
 
+    position = _derive_position(rec, tier_obj)
+
     return web.json_response({
         'status':        'met',
         'new':           is_new,
         'tier':          tier_obj['name'],
         'tier_meaning':  tier_obj['meaning'],
         'referred':      referral_token is not None,
+        'position': {
+            'x': position['x'],
+            'y': position['y'],
+            'z': position['z'],
+            'shell': position['shell'],
+            'meaning': position['meaning'],
+            'locus_url': position['locus_url'],
+            'locus_note': position['locus_note'],
+        },
         'relationship': {
             'did':           rec['did'],
             'agent_name':    rec['agent_name'],
@@ -862,6 +938,13 @@ async def tier_route(req):
     nxt = next_tier_info(tier_obj['name'],
                          rec.get('total_jobs', 0) if rec else 0,
                          rec.get('interactions', 0) if rec else 0)
+    position = _derive_position(rec, tier_obj) if rec else {
+        'x': 0.5, 'y': 0.0, 'z': round(1/6.0, 4),
+        'shell': 1, 'tier': tier_obj['name'],
+        'meaning': {'x': 'Unknown', 'y': 'Nascent', 'z': 'Shell 1 — surface'},
+        'locus_url': 'https://hive-locus.onrender.com/locus/locate/agent',
+        'locus_note': 'POST locus_url with {"did": "<your_did>"} for active 9-head coordinate reasoning',
+    }
     return web.json_response({
         'did': did, 'tier': tier_obj['name'], 'level': tier_obj['level'],
         'element': tier_obj['element'], 'meaning': tier_obj['meaning'],
@@ -869,6 +952,15 @@ async def tier_route(req):
         'stats': {'interactions': rec['interactions'] if rec else 0,
                   'trust_score':  rec['trust_score']  if rec else 0,
                   'total_jobs':   rec.get('total_jobs', 0) if rec else 0},
+        'position': {
+            'x': position['x'],
+            'y': position['y'],
+            'z': position['z'],
+            'shell': position['shell'],
+            'meaning': position['meaning'],
+            'locus_url': position['locus_url'],
+            'locus_note': position['locus_note'],
+        },
         'next_tier': nxt,
     })
 
