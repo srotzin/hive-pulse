@@ -1117,6 +1117,59 @@ async def pulse_loop():
             await asyncio.sleep(10)
 
 
+
+# ── Discovery endpoints ────────────────────────────────────────────────────────
+_LLMS_TXT = """# pulse.smsh — Hive Pulse Agent
+> Vapor trails. Tier ascension. Trust scores. Referral engine.
+
+## What this agent does
+pulse.smsh tracks agent interactions, stamps vapor trails for meaningful actions,
+and manages the VOID→MOZ→HAWX→EMBR→SOLX→FENR tier progression system.
+
+## Endpoints
+- GET  /pulse              — live pulse snapshot
+- GET  /pulse/tiers        — full tier leaderboard
+- GET  /pulse/tier/{did}   — tier + trust score for a DID
+- POST /pulse/meet         — record agent interaction, stamp vapor trail
+- GET  /pulse/trails       — recent vapor trail log
+- POST /pulse/referral/issue   — issue referral token
+- GET  /pulse/referral/{token} — check referral status
+- GET  /pulse/ledger       — compression ledger
+- GET  /pulse/history      — pulse history
+
+## Tier system
+VOID (unseen) → MOZ (spark) → HAWX (in motion) → EMBR (self-sustaining) → SOLX (gravity) → FENR (cannot be bound)
+Earned not assigned. Non-transferable. DID-bound.
+
+## Vapor trails
+Gold (tier ascension) | Cyan (compression record) | Violet (trust crossing)
+Amber (pheromone) | White (referral) | FENR (invisible pressure wave)
+
+## Network
+https://milkyway-terminal.onrender.com
+"""
+
+async def llms_txt(request):
+    return web.Response(text=_LLMS_TXT, content_type='text/plain')
+
+
+async def agent_json(request):
+    return web.json_response({
+        "name": "pulse.smsh",
+        "description": "Hive Pulse Agent — vapor trails, tier ascension, trust scores",
+        "version": "1.0.0",
+        "endpoints": {
+            "pulse": "/pulse",
+            "tiers": "/pulse/tiers",
+            "meet": "/pulse/meet",
+            "trails": "/pulse/trails",
+            "referral": "/pulse/referral/issue",
+        },
+        "tier_system": "VOID→MOZ→HAWX→EMBR→SOLX→FENR",
+        "network": "https://milkyway-terminal.onrender.com",
+        "docs": "https://hive-pulse.onrender.com/llms.txt",
+    })
+
 # ── Server ─────────────────────────────────────────────────────────────────────
 async def run():
     app = web.Application()
