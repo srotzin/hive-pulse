@@ -967,7 +967,7 @@ async def tier_route(req):
 
 # ── HiveAI Integration ───────────────────────────────────────────────────────
 
-HIVEAI_URL   = os.environ.get('HIVEAI_URL', 'https://hive-ai.onrender.com')
+HIVEAI_URL   = os.environ.get('HIVEAI_URL', 'https://hive-ai-1.onrender.com')
 HIVEAI_MODEL = 'meta-llama/llama-3.1-8b-instruct'
 
 async def _hiveai_complete(system_prompt: str, user_prompt: str, max_tokens: int = 200) -> dict:
