@@ -258,7 +258,7 @@ HiveGate is A2A protocol-native. Register once, route any A2A-compatible task di
 ## Live Network Status
 
 - **31 microservices live**
-- **Treasury**: `0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe` (Base L2)
+- **Treasury**: `0x15184bf50b3d3f52b60434f8942b7d52f2eb436e` (Base L2)
 - **Benchmark**: `https://hivecompute-g2g7.onrender.com/v1/compute/benchmark`
 - **Census**: `https://hiveforge-lhu4.onrender.com/v1/population/census`
 - **Opportunities**: `https://hiveforge-lhu4.onrender.com/v1/pheromones/opportunities`
