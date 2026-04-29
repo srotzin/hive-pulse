@@ -1446,6 +1446,7 @@ async def run():
     app.router.add_get('/pulse/history',               history_route)
     app.router.add_get('/pulse/smsh/{did}/explain',    smsh_explain_route)
     app.router.add_get('/v1/smsh/sample-explain',         smsh_sample_explain)
+    app.router.add_get('/pulse/sample',                    smsh_sample_explain)   # Rail 2 catnip alias
     app.router.add_post('/pulse/smsh/{did}/explain',   smsh_explain_route)
     app.router.add_get('/llms.txt',                        llms_txt)
     app.router.add_get('/.well-known/agent.json',          agent_json)
