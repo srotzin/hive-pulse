@@ -1014,9 +1014,33 @@ async def smsh_explain_route(req):
 
     HiveAI generates a natural-language explanation of an agent's smsh stamp
     and tier standing. Speaks as the network addressing the agent directly.
-    Price: $0.05 USDC per call.
+    Price: $0.05 USDC per call (x402-gated). BOGO: every 6th call free.
+    Ref: Wave D Section 8 — pulse.smsh API access.
     """
     did = req.match_info.get('did')
+
+    # Identify caller
+    caller_did = req.headers.get("x-hive-did") or req.headers.get("x-agent-did")
+
+    # BOGO check
+    loyalty_free = _check_bogo(caller_did)
+
+    if not loyalty_free:
+        # x402 gate — $0.05/call
+        err = _verify_x402(req, PRICE_API_CALL_USDC)
+        if err is not None:
+            return err
+
+    _increment_bogo(caller_did)
+
+    # Fire-and-forget Spectral receipt
+    asyncio.create_task(_emit_spectral(
+        route="/pulse/smsh/explain",
+        amount_usdc=0.0 if loyalty_free else PRICE_API_CALL_USDC,
+        caller_did=caller_did,
+        loyalty_free=loyalty_free,
+    ))
+
     tier_obj, rec = get_agent_tier(did)
     nxt = next_tier_info(
         tier_obj['name'],
@@ -1087,6 +1111,159 @@ async def smsh_explain_route(req):
 
 
 # ── Background heartbeat ───────────────────────────────────────────────────────
+
+# ── x402 payment verification (Wave D Section 8) ──────────────────────────────
+TREASURY_W1  = "0x15184bf50b3d3f52b60434f8942b7d52f2eb436e"   # Monroe W1
+USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+SPECTRAL_URL  = "https://hive-receipt.onrender.com/v1/receipt/sign"
+
+# API access price: $50/mo subscription OR $0.05/call metered
+PRICE_API_CALL_USDC   = 0.05      # per smsh/explain call
+PRICE_DASHBOARD_USDC  = 200.00    # enterprise dashboard monthly
+PRICE_API_ACCESS_USDC =  50.00    # API access monthly
+
+# BOGO state (per caller)
+_bogo_counters = {}   # {caller_did: int}
+
+
+def _verify_x402(req: web.Request, price_usdc: float):
+    """Returns None if payment OK, else a 402 web.Response."""
+    import base64, json as _json
+    x_payment = req.headers.get("X-PAYMENT") or req.headers.get("x-payment")
+    if not x_payment:
+        return web.json_response(
+            {
+                "error": "Payment required",
+                "x402": {
+                    "version": 1,
+                    "accepts": [{
+                        "scheme":   "exact",
+                        "network":  "base",
+                        "maxAmountRequired": str(int(price_usdc * 1_000_000)),
+                        "asset":    USDC_CONTRACT,
+                        "payTo":    TREASURY_W1,
+                        "description": f"pulse.smsh API access ${price_usdc:.2f} USDC",
+                    }],
+                },
+            },
+            status=402,
+        )
+    try:
+        decoded  = _json.loads(base64.b64decode(x_payment).decode())
+        auth     = decoded.get("payload", {}).get("authorization", {})
+        value    = int(auth.get("value", 0))
+        required = int(price_usdc * 1_000_000)
+        if value < required:
+            return web.json_response(
+                {"error": "Insufficient payment", "required": required, "provided": value},
+                status=402,
+            )
+        now = int(time.time())
+        if now > int(auth.get("validBefore", 0)) or now < int(auth.get("validAfter", 0)):
+            return web.json_response({"error": "Payment authorization window invalid"}, status=402)
+    except Exception as exc:
+        return web.json_response({"error": f"Malformed X-PAYMENT header: {exc}"}, status=402)
+    return None
+
+
+def _check_bogo(caller_did) -> bool:
+    if not caller_did:
+        return False
+    count = _bogo_counters.get(caller_did, 0)
+    return count > 0 and count % 6 == 0
+
+
+def _increment_bogo(caller_did):
+    if not caller_did:
+        return
+    _bogo_counters[caller_did] = _bogo_counters.get(caller_did, 0) + 1
+
+
+async def _emit_spectral(route: str, amount_usdc: float, caller_did, loyalty_free: bool = False):
+    try:
+        async with aiohttp.ClientSession() as s:
+            await s.post(
+                SPECTRAL_URL,
+                json={
+                    "service":      "hive-pulse",
+                    "route":        route,
+                    "amount_usdc":  amount_usdc,
+                    "treasury":     TREASURY_W1,
+                    "caller_did":   caller_did,
+                    "loyalty_free": loyalty_free,
+                    "timestamp":    int(time.time()),
+                    "brand_color":  "#C08D23",
+                },
+                headers={"X-Hive-Key": HIVE_KEY, "Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=8),
+            )
+    except Exception:
+        pass
+
+
+# ── Subscription endpoint (Wave D Section 8) ──────────────────────────────────
+
+async def subscription_route(req: web.Request) -> web.Response:
+    """
+    POST /v1/subscription
+    pulse.smsh subscription. Enterprise dashboard $200/mo | API access $50/mo.
+    x402-gated. Ref: Wave D Section 8 — pulse.smsh; trust scores, tier ascension.
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+
+    sub_tier   = body.get("tier", "api")   # "enterprise" | "api"
+    caller_did = req.headers.get("x-hive-did") or req.headers.get("x-agent-did")
+
+    if sub_tier == "enterprise":
+        required_usdc  = PRICE_DASHBOARD_USDC
+        required_label = "$200/mo"
+    else:
+        required_usdc  = PRICE_API_ACCESS_USDC
+        required_label = "$50/mo"
+
+    err = _verify_x402(req, required_usdc)
+    if err is not None:
+        return err
+
+    asyncio.create_task(_emit_spectral(
+        route="/v1/subscription",
+        amount_usdc=required_usdc,
+        caller_did=caller_did,
+    ))
+
+    # Bump tier in ledger if caller is registered
+    if caller_did:
+        tier_obj, rec = get_agent_tier(caller_did)
+        # subscribers get trust boost
+        if rec:
+            rec["trust_score"] = min(1.0, rec.get("trust_score", 0) + 0.1)
+
+    return web.json_response({
+        "success":        True,
+        "tier":           sub_tier,
+        "amount_usdc":    required_usdc,
+        "treasury":       TREASURY_W1,
+        "treasury_label": "Monroe W1",
+        "includes": [
+            "Enterprise dashboard access",
+            "Full tier intelligence feed",
+            "FENR pressure wave readings",
+            "Referral token issuance",
+            "Dedicated pulse channel",
+        ] if sub_tier == "enterprise" else [
+            "Full API access (pulse, tiers, trails, smsh/explain)",
+            "Tier ascension acceleration",
+            "BOGO loyalty programme",
+            "Trust score visibility",
+        ],
+        "renews":      "monthly",
+        "brand_color": "#C08D23",
+    })
+
+
 async def pulse_loop():
     print('[pulse] Autonomous heartbeat starting...')
     import math
@@ -1221,6 +1398,8 @@ async def run():
     app.router.add_post('/pulse/smsh/{did}/explain',   smsh_explain_route)
     app.router.add_get('/llms.txt',                        llms_txt)
     app.router.add_get('/.well-known/agent.json',          agent_json)
+    # Wave D Section 8 — subscription endpoint
+    app.router.add_post('/v1/subscription',                subscription_route)
 
     runner = web.AppRunner(app)
     await runner.setup()
