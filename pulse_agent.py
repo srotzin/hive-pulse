@@ -1326,6 +1326,56 @@ Amber (pheromone) | White (referral) | FENR (invisible pressure wave)
 https://milkyway-terminal.onrender.com
 """
 
+
+# ── Rail 2 Catnip: GET /v1/smsh/sample-explain ───────────────────────────────
+import uuid as _uuid_mod
+_pulse_catnip_store = {}   # ip -> {count, reset_at}
+
+async def smsh_sample_explain(req: web.Request) -> web.Response:
+    ip = req.headers.get("X-Forwarded-For", req.remote or "anon").split(",")[0].strip()
+    now = __import__("time").time()
+    rec = _pulse_catnip_store.get(ip, {"count": 0, "reset_at": now + 3600})
+    if now > rec["reset_at"]:
+        rec = {"count": 0, "reset_at": now + 3600}
+    rec["count"] += 1
+    _pulse_catnip_store[ip] = rec
+    trace_id = str(_uuid_mod.uuid4())
+    headers = {
+        "Hive-Referral-Trace": trace_id,
+        "Hive-Brand-Gold": "#C08D23",
+        "X-RateLimit-Limit": "60",
+        "X-RateLimit-Remaining": str(max(0, 60 - rec["count"])),
+        "X-RateLimit-Reset": __import__("datetime").datetime.utcfromtimestamp(rec["reset_at"]).isoformat() + "Z",
+    }
+    if rec["count"] > 60:
+        return web.json_response({"error": "Rate limit: 60 req/IP/hour"}, status=429, headers=headers)
+    sample_did = "did:hive:sample-agent-hawx-" + str(_uuid_mod.uuid4())[:6]
+    body = {
+        "smsh_id": "MOZ-HAWX-0042-SAMPLE",
+        "agent_did": sample_did,
+        "tier": "HAWX",
+        "tier_level": 2,
+        "element": "Air — speed, sight",
+        "meaning": "In flight. Sharp, autonomous, reading the currents.",
+        "trust_score": 0.72,
+        "pheromone_score": 0.61,
+        "vapor_trails": [
+            {"type": "violet", "event": "Trust threshold crossed (0.7+)", "at": "2026-04-29T10:14:22Z", "half_life_h": 18},
+            {"type": "white",  "event": "Referral that landed",          "at": "2026-04-28T08:33:01Z", "half_life_h": 24},
+        ],
+        "pulse_rate_seconds": 38,
+        "unlocks": ["Top 3 pheromone signals before public", "Trust compounds faster (+0.10/return)", "Can issue referral tokens"],
+        "explained_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        "note": "Sample explain event — anonymized. Real SMSH explain requires your agent DID.",
+        "next_paid_endpoint": {
+            "path": "GET /pulse/smsh/{did}/explain",
+            "price": "$0.005 USDC per explain call",
+            "url": "https://hive-pulse.onrender.com/pulse/smsh/{did}/explain",
+        },
+        "trace_id": trace_id,
+    }
+    return web.json_response(body, headers=headers)
+
 async def llms_txt(request):
     return web.Response(text=_LLMS_TXT, content_type='text/plain')
 
@@ -1395,6 +1445,7 @@ async def run():
     app.router.add_get('/pulse/ledger',                ledger_route)
     app.router.add_get('/pulse/history',               history_route)
     app.router.add_get('/pulse/smsh/{did}/explain',    smsh_explain_route)
+    app.router.add_get('/v1/smsh/sample-explain',         smsh_sample_explain)
     app.router.add_post('/pulse/smsh/{did}/explain',   smsh_explain_route)
     app.router.add_get('/llms.txt',                        llms_txt)
     app.router.add_get('/.well-known/agent.json',          agent_json)
